@@ -45,13 +45,46 @@ export const createJournal = async (req,res) => {
 export const getAllJournals = async (req,res) => {
     try{
         const userId = req.user.userId;
+        const page = Math.max(1, Number(req.query.page) || 1);
+        const limit = Math.max(1, Number(req.query.limit) || 10);
+        const search = req.query.search;
 
-        const allJournals = await Journal.find({userId : userId});
+        let filter = {
+            userId
+        }
+        if(search){
+            filter.$or = [
+                {
+                    title : {
+                        $regex : search,
+                        $options : "i"
+                    }
+                },
+                {
+                    content : {
+                        $regex : search,
+                        $options : "i"
+                    }
+                }
+            ];
+        }
+
+        const skip = (page - 1) * limit;
+
+        const allJournals = await Journal.find(filter).sort({createdAt : -1}).skip(skip).limit(limit);
+
+        const totalJournalsCount = await Journal.countDocuments(filter);
 
         return res.status(200).json({
             success : true,
             message : "Journals fetched successfully.",
-            data : allJournals
+            data : {
+                journals: allJournals,
+                currentPage: page,
+                limit: limit,
+                totalJournals: totalJournalsCount,
+                totalPages: Math.ceil(totalJournalsCount / limit)
+            },
         })
     }
     catch(error){

@@ -34,7 +34,8 @@ export const signUp = (data) => api.post("/auth/signup", data);
 export const signIn = (data) => api.post("/auth/signin", data);
 
 // ===== Journals =====
-export const getAllJournals = () => api.get("/journals");
+export const getAllJournals = (page = 1, limit = 6, search = "") =>
+  api.get("/journals", { params: { page, limit, ...(search ? { search } : {}) } });
 export const getJournalById = (id) => api.get(`/journals/${id}`);
 export const createJournal = (data) => api.post("/journals", data);
 export const updateJournal = (id, data) => api.put(`/journals/${id}`, data);

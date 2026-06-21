@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import Navbar from "../components/Navbar";
 import JournalCard from "../components/JournalCard";
 import JournalForm from "../components/JournalForm";
 import { getAllJournals, createJournal, updateJournal, deleteJournal } from "../services/api";
 import { useToast } from "../context/ToastContext";
 
-// Modal wrapper
+const LIMIT = 6; // journals per page
+
+// ===== MODAL WRAPPER =====
 const Modal = ({ title, onClose, children }) => (
   <div className="modal-overlay" onClick={onClose}>
     <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -38,7 +40,7 @@ const Modal = ({ title, onClose, children }) => (
   </div>
 );
 
-// Read-only view modal
+// ===== READ-ONLY VIEW MODAL =====
 const ViewModal = ({ journal, onClose, onEdit, onDelete }) => {
   const formatDate = (d) =>
     new Date(d).toLocaleDateString("en-US", {
@@ -104,7 +106,7 @@ const ViewModal = ({ journal, onClose, onEdit, onDelete }) => {
   );
 };
 
-// Confirm delete dialog
+// ===== CONFIRM DELETE DIALOG =====
 const ConfirmDelete = ({ journal, onConfirm, onCancel, loading }) => (
   <div className="confirm-overlay">
     <div className="confirm-dialog">
@@ -128,12 +130,95 @@ const ConfirmDelete = ({ journal, onConfirm, onCancel, loading }) => (
   </div>
 );
 
+// ===== PAGINATION COMPONENT =====
+const Pagination = ({ currentPage, totalPages, onPageChange }) => {
+  if (totalPages <= 1) return null;
+
+  const getPageNumbers = () => {
+    const pages = [];
+    const delta = 1; // pages around current
+    const left = currentPage - delta;
+    const right = currentPage + delta;
+
+    for (let i = 1; i <= totalPages; i++) {
+      if (i === 1 || i === totalPages || (i >= left && i <= right)) {
+        pages.push(i);
+      }
+    }
+
+    // Insert ellipsis
+    const withEllipsis = [];
+    let prev = null;
+    for (const page of pages) {
+      if (prev !== null && page - prev > 1) {
+        withEllipsis.push("...");
+      }
+      withEllipsis.push(page);
+      prev = page;
+    }
+    return withEllipsis;
+  };
+
+  return (
+    <div className="pagination-container">
+      {/* Previous */}
+      <button
+        id="btn-page-prev"
+        className="pagination-btn"
+        onClick={() => onPageChange(currentPage - 1)}
+        disabled={currentPage === 1}
+        aria-label="Previous page"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="15 18 9 12 15 6" />
+        </svg>
+      </button>
+
+      {/* Page numbers */}
+      {getPageNumbers().map((page, idx) =>
+        page === "..." ? (
+          <span key={`ellipsis-${idx}`} className="pagination-ellipsis">…</span>
+        ) : (
+          <button
+            key={page}
+            id={`btn-page-${page}`}
+            className={`pagination-btn ${currentPage === page ? "pagination-btn-active" : ""}`}
+            onClick={() => onPageChange(page)}
+            aria-label={`Go to page ${page}`}
+            aria-current={currentPage === page ? "page" : undefined}
+          >
+            {page}
+          </button>
+        )
+      )}
+
+      {/* Next */}
+      <button
+        id="btn-page-next"
+        className="pagination-btn"
+        onClick={() => onPageChange(currentPage + 1)}
+        disabled={currentPage === totalPages}
+        aria-label="Next page"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      </button>
+    </div>
+  );
+};
+
 // ===== DASHBOARD =====
 const Dashboard = () => {
   const { showToast } = useToast();
 
   const [journals, setJournals] = useState([]);
   const [fetching, setFetching] = useState(true);
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalJournals, setTotalJournals] = useState(0);
 
   // Modal states
   const [createOpen, setCreateOpen] = useState(false);
@@ -144,14 +229,32 @@ const Dashboard = () => {
   const [formLoading, setFormLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  // Search / filter
+  // Search state
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debounceTimer = useRef(null);
+
+  // Debounce: wait 400ms after user stops typing
+  const handleSearchChange = (e) => {
+    const val = e.target.value;
+    setSearch(val);
+    clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      setDebouncedSearch(val);
+      setCurrentPage(1); // reset to first page on new search
+    }, 400);
+  };
 
   // ---- Fetch ----
-  const fetchJournals = useCallback(async () => {
+  const fetchJournals = useCallback(async (page = 1, searchTerm = "") => {
+    setFetching(true);
     try {
-      const res = await getAllJournals();
-      setJournals(res.data.data || []);
+      const res = await getAllJournals(page, LIMIT, searchTerm);
+      const { journals: fetchedJournals, currentPage: cp, totalPages: tp, totalJournals: tj } = res.data.data;
+      setJournals(fetchedJournals || []);
+      setCurrentPage(cp);
+      setTotalPages(tp);
+      setTotalJournals(tj);
     } catch {
       showToast("Failed to load journals.", "error");
     } finally {
@@ -159,18 +262,32 @@ const Dashboard = () => {
     }
   }, [showToast]);
 
+  // Initial load
   useEffect(() => {
-    fetchJournals();
+    fetchJournals(1, "");
   }, [fetchJournals]);
+
+  // Re-fetch when debounced search changes
+  useEffect(() => {
+    fetchJournals(1, debouncedSearch);
+  }, [debouncedSearch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handlePageChange = (page) => {
+    fetchJournals(page, debouncedSearch);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   // ---- Create ----
   const handleCreate = async (data) => {
     setFormLoading(true);
     try {
-      const res = await createJournal(data);
-      setJournals((prev) => [res.data.data, ...prev]);
+      await createJournal(data);
       setCreateOpen(false);
       showToast("Journal entry created! ✍️", "success");
+      // Clear search and go to page 1 to see the newest entry
+      setSearch("");
+      setDebouncedSearch("");
+      fetchJournals(1, "");
     } catch (err) {
       showToast(err.response?.data?.message || "Failed to create entry.", "error");
     } finally {
@@ -183,6 +300,7 @@ const Dashboard = () => {
     setFormLoading(true);
     try {
       const res = await updateJournal(editJournal._id, data);
+      // Update in place without refetch if on same page
       setJournals((prev) =>
         prev.map((j) => (j._id === editJournal._id ? res.data.data : j))
       );
@@ -200,9 +318,11 @@ const Dashboard = () => {
     setDeleteLoading(true);
     try {
       await deleteJournal(deleteTarget._id);
-      setJournals((prev) => prev.filter((j) => j._id !== deleteTarget._id));
       setDeleteTarget(null);
       showToast("Entry deleted.", "success");
+      // If we deleted the last item on this page, go back one page
+      const isLastOnPage = journals.length === 1 && currentPage > 1;
+      fetchJournals(isLastOnPage ? currentPage - 1 : currentPage, debouncedSearch);
     } catch {
       showToast("Failed to delete entry.", "error");
     } finally {
@@ -210,12 +330,12 @@ const Dashboard = () => {
     }
   };
 
-  // ---- Filtered journals ----
-  const filtered = journals.filter(
-    (j) =>
-      j.title.toLowerCase().includes(search.toLowerCase()) ||
-      j.content.toLowerCase().includes(search.toLowerCase())
-  );
+  // Journals are already filtered by the server; just use them directly
+  const filtered = journals;
+
+  // Pagination range text
+  const rangeStart = totalJournals === 0 ? 0 : (currentPage - 1) * LIMIT + 1;
+  const rangeEnd = Math.min(currentPage * LIMIT, totalJournals);
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--color-bg-primary)" }}>
@@ -223,10 +343,7 @@ const Dashboard = () => {
 
       <main className="dashboard-layout">
         {/* Page header */}
-        <div
-          className="animate-fade-in"
-          style={{ marginBottom: "36px" }}
-        >
+        <div className="animate-fade-in" style={{ marginBottom: "36px" }}>
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
             <div>
               <p style={{ fontSize: "13px", color: "var(--color-accent-secondary)", fontWeight: "500", marginBottom: "6px", letterSpacing: "0.5px", textTransform: "uppercase" }}>
@@ -242,9 +359,16 @@ const Dashboard = () => {
               >
                 My Journal{" "}
                 <span className="gradient-text">
-                  {journals.length > 0 && `(${journals.length})`}
+                  {totalJournals > 0 && `(${totalJournals})`}
                 </span>
               </h1>
+              {totalJournals > 0 && !fetching && (
+                <p style={{ fontSize: "13px", color: "var(--color-text-muted)", marginTop: "6px" }}>
+                  {debouncedSearch
+                    ? `${totalJournals} result${totalJournals !== 1 ? "s" : ""} for "${debouncedSearch}"`
+                    : `Showing ${rangeStart}–${rangeEnd} of ${totalJournals} entries`}
+                </p>
+              )}
             </div>
 
             <button
@@ -261,26 +385,41 @@ const Dashboard = () => {
             </button>
           </div>
 
-          {/* Search */}
-          {journals.length > 0 && (
-            <div style={{ marginTop: "20px", position: "relative", maxWidth: "380px" }}>
-              <svg
-                style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: "var(--color-text-muted)" }}
-                width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          {/* Search — server-side with debounce */}
+          <div style={{ marginTop: "20px", position: "relative", maxWidth: "380px" }}>
+            <svg
+              style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: "var(--color-text-muted)", zIndex: 1 }}
+              width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            >
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              id="search-journals"
+              type="text"
+              className="input-field"
+              placeholder="Search all entries…"
+              value={search}
+              onChange={handleSearchChange}
+              style={{ paddingLeft: "36px", paddingRight: search ? "36px" : "16px" }}
+            />
+            {/* Clear button */}
+            {search && (
+              <button
+                id="btn-search-clear"
+                onClick={() => { setSearch(""); setDebouncedSearch(""); }}
+                style={{
+                  position: "absolute", right: "10px", top: "50%", transform: "translateY(-50%)",
+                  background: "none", border: "none", cursor: "pointer",
+                  color: "var(--color-text-muted)", display: "flex", alignItems: "center", padding: "4px"
+                }}
+                aria-label="Clear search"
               >
-                <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-              <input
-                id="search-journals"
-                type="text"
-                className="input-field"
-                placeholder="Search entries…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                style={{ paddingLeft: "36px" }}
-              />
-            </div>
-          )}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Content */}
@@ -288,7 +427,7 @@ const Dashboard = () => {
           <div style={{ display: "flex", justifyContent: "center", padding: "80px 0" }}>
             <div className="spinner" />
           </div>
-        ) : journals.length === 0 ? (
+        ) : journals.length === 0 && !debouncedSearch ? (
           <div className="empty-state animate-fade-in">
             <div className="empty-state-icon">📝</div>
             <h2 style={{ fontFamily: "var(--font-serif)", fontSize: "22px", fontWeight: "600" }}>
@@ -306,28 +445,37 @@ const Dashboard = () => {
               Write your first entry
             </button>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : journals.length === 0 && debouncedSearch ? (
           <div className="empty-state animate-fade-in">
             <div className="empty-state-icon">🔍</div>
             <h2 style={{ fontFamily: "var(--font-serif)", fontSize: "20px", fontWeight: "600" }}>
               No results found
             </h2>
             <p style={{ fontSize: "14px", color: "var(--color-text-secondary)" }}>
-              Try a different search term.
+              No entries match &ldquo;{debouncedSearch}&rdquo;. Try a different search term.
             </p>
           </div>
         ) : (
-          <div className="journal-grid stagger-children">
-            {filtered.map((journal) => (
-              <JournalCard
-                key={journal._id}
-                journal={journal}
-                onClick={(j) => setViewJournal(j)}
-                onEdit={(j) => setEditJournal(j)}
-                onDelete={(j) => setDeleteTarget(j)}
-              />
-            ))}
-          </div>
+          <>
+            <div className="journal-grid stagger-children">
+              {filtered.map((journal) => (
+                <JournalCard
+                  key={journal._id}
+                  journal={journal}
+                  onClick={(j) => setViewJournal(j)}
+                  onEdit={(j) => setEditJournal(j)}
+                  onDelete={(j) => setDeleteTarget(j)}
+                />
+              ))}
+            </div>
+
+            {/* Pagination works with search too (server-side) */}
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={handlePageChange}
+            />
+          </>
         )}
       </main>
 
