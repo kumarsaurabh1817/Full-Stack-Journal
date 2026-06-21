@@ -10,7 +10,7 @@ export const authMiddleware = (req,res,next) => {
                 message : "Unauthorized Access"
             })
         }
-        const decodedToken = jwt.verify(token,process.env.JWT_SECRET);
+        const decodedToken = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
         req.user = decodedToken;
         next();
     }

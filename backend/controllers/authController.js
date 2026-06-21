@@ -1,6 +1,7 @@
 import User from '../models/userModel.js';
 import { getHashedPassword, handleComparePassword } from '../utils/helper.js';
 import jwt from "jsonwebtoken"
+import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../utils/tokens.js';
 
 export const SignUp = async (req, res) => {
     try{
@@ -71,20 +72,23 @@ export const SignIn = async (req, res) => {
             })
         }
 
-        const token = jwt.sign(
-                {
-                    userId: existingUser._id,
-                    email: existingUser.email
-                },
-                process.env.JWT_SECRET,
-                { expiresIn: "1h" }
-            );
+        const payload = {
+            userId: existingUser._id,
+            email: existingUser.email
+        };
+        const accessToken = generateAccessToken(payload); 
+        const refreshToken = generateRefreshToken(payload); 
+        
+        existingUser.refreshToken = refreshToken;
+        // save to database
+        await existingUser.save();
         
         return res.status(200).json({ success : true,                 
             data: {
                     userId: existingUser._id,
                     email: existingUser.email,
-                    token: token,
+                    accessToken: accessToken,
+                    refreshToken: refreshToken,
                 }, });
     }
     catch (error){
@@ -94,4 +98,85 @@ export const SignIn = async (req, res) => {
             message : "User sign in Failed."
         })
     }
+}
+
+export const handleRefreshToken = async (req, res) => {
+    try{
+        const { refreshToken } = req.body;
+
+        if(!refreshToken) {
+            return res.status(400).json({
+                success : false,
+                message : "refreshToken not found"
+            })
+        }
+
+        const decoded = verifyRefreshToken(refreshToken);
+        if(!decoded){
+            return res.status(400).json({
+                success : false,
+                message : "Invalid refreshToken"
+            })
+        }
+
+        const user = await User.findById(decoded.userId);
+        if(!user){
+            return res.status(400).json({
+                success : false,
+                message : "user not found "
+            })
+        }
+
+        if(user.refreshToken !== refreshToken){
+            return res.status(400).json({
+                success : false,
+                message : "wrong refreshToken"
+            })
+        }
+        const payload = {
+            userId: user._id,
+            email: user.email
+        };
+        const accessToken = generateAccessToken(payload);
+        
+        return res.status(200).json({
+            success: true,
+            accessToken: accessToken
+        });
+    }
+    catch(error){
+        console.log(`Error in handleRefreshToken : ${error.message}`)
+        return res.status(400).json({
+            success : false,
+            message : "Failed to refresh token."
+        })
+    }
+
+}
+
+export const Logout = async (req, res) => {
+    const userId = req.user.userId;
+
+    if(!userId){
+        return res.status(400).json({
+            success : false,
+            message : "userId not found"
+        })
+    }
+    
+    const existingUser = await User.findById(userId);
+    if(!existingUser){
+        return res.status(400).json({
+            success : false,
+            message : "existingUser not found"
+        })
+    }
+
+    existingUser.refreshToken = null;
+    await existingUser.save();
+
+    return res.status(200).json({
+        success :  true,
+        message : "Logout done"
+    })
 }

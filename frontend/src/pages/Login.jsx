@@ -34,8 +34,8 @@ const Login = () => {
     setLoading(true);
     try {
       const res = await signIn({ email: form.email, password: form.password });
-      const { userId, email, token } = res.data.data;
-      login({ userId, email }, token);
+      const { userId, email, accessToken, refreshToken } = res.data.data;
+      login({ userId, email }, accessToken, refreshToken);
       showToast("Welcome back! 👋", "success");
       navigate("/dashboard");
     } catch (err) {
